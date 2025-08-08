@@ -11,35 +11,51 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Cloudinary config
+// ---------- CLOUDINARY CONFIG ----------
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || '',
+  api_key: process.env.CLOUDINARY_API_KEY || '',
+  api_secret: process.env.CLOUDINARY_API_SECRET || '',
 });
 
-// MySQL connection (env-driven)
+// ---------- MYSQL CONNECTION ----------
 const db = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME,
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASS || '',
+  database: process.env.DB_NAME || 'shopdb',
+  multipleStatements: true
 });
 
-// Connect DB
 db.connect(err => {
   if (err) {
-    console.error('MySQL connection error:', err);
-    // don't exit here if you prefer to allow the app to start for debugging
+    console.error('❌ MySQL connection failed:', err.message);
   } else {
-    console.log('✅ MySQL Connected');
+    console.log('✅ MySQL Connected to', process.env.DB_NAME);
   }
 });
 
-// Use memory storage so multer gives us a buffer (we'll stream to Cloudinary)
+// ---------- MULTER (Memory Storage) ----------
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ---------- ROUTES ----------
+
+// Welcome route
+app.get('/', (req, res) => {
+  res.json({
+    message: "Welcome to Shop API",
+    endpoints: {
+      categories: {
+        get: "/categories",
+        post: "/categories"
+      },
+      products: {
+        get: "/products",
+        post: "/products"
+      }
+    }
+  });
+});
 
 // Get categories
 app.get('/categories', (req, res) => {
@@ -60,14 +76,16 @@ app.post('/categories', (req, res) => {
   });
 });
 
-// Upload product (image streamed to Cloudinary)
+// Add product (with optional Cloudinary image)
 app.post('/products', upload.single('image'), (req, res) => {
   const { title, description, price, category_id } = req.body;
+
+  if (!title) return res.status(400).json({ message: 'Product title is required' });
 
   function insertProduct(imageUrl) {
     db.query(
       'INSERT INTO products (title, description, price, image, category_id) VALUES (?, ?, ?, ?, ?)',
-      [title, description, price || 0, imageUrl, category_id || null],
+      [title, description || '', price || 0, imageUrl, category_id || null],
       (err) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ message: 'Product added successfully' });
@@ -75,17 +93,16 @@ app.post('/products', upload.single('image'), (req, res) => {
     );
   }
 
-  if (req.file && req.file.buffer) {
+  if (req.file && req.file.buffer && process.env.CLOUDINARY_CLOUD_NAME) {
     const uploadStream = cloudinary.uploader.upload_stream(
       { folder: process.env.CLOUDINARY_FOLDER || 'shop_products' },
       (error, result) => {
-        if (error) return res.status(500).json({ error });
+        if (error) return res.status(500).json({ error: error.message });
         insertProduct(result.secure_url);
       }
     );
     streamifier.createReadStream(req.file.buffer).pipe(uploadStream);
   } else {
-    // no image supplied
     insertProduct(null);
   }
 });
@@ -101,6 +118,6 @@ app.get('/products', (req, res) => {
   );
 });
 
-// Start
+// ---------- START SERVER ----------
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
